@@ -99,6 +99,11 @@ describe("card location and measurement at 300 DPI", () => {
     expect(card.side).toBe("back");
   });
 
+  it("recognises a real scanned back, whose swirl is a greyer blue", () => {
+    const { card } = run({ ...base, border: [24, 66, 132], art: [120, 134, 158] });
+    expect(card.side).toBe("back");
+  });
+
   it("recognises a front with a yellow border", () => {
     const { card } = run(base);
     expect(card.side).toBe("front");

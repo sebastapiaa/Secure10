@@ -319,7 +319,8 @@ function guessSide(crop: Raster, outer: EdgeLines, inner: EdgeLines): CardSide {
     lineAt(inner.top, crop.width / 2) + 20,
     lineAt(inner.bottom, crop.width / 2) - 20,
   );
-  return borderLeft.b < -20 && interior.b < -12 ? "back" : "front";
+  // No Pokémon front has a saturated blue border. The back's swirl scans as a greyer blue than a clean render.
+  return borderLeft.b < -18 && interior.b < -2 ? "back" : "front";
 }
 
 export function analyzeScan(src: Raster, meta: ScanMeta): CardAnalysis[] {
@@ -396,6 +397,12 @@ function analyzeCard(
     if (reading) readings[edge] = reading;
   }
   const tilt = frameTilt(readings, outer, pxPerMm);
+  const side = guessSide(crop, outer, {
+    left: readings.left?.line ?? { a: outer.left.a + pxPerMm * 3, b: outer.left.b },
+    right: readings.right?.line ?? { a: outer.right.a - pxPerMm * 3, b: outer.right.b },
+    top: readings.top?.line ?? { a: outer.top.a + pxPerMm * 3, b: outer.top.b },
+    bottom: readings.bottom?.line ?? { a: outer.bottom.a - pxPerMm * 3, b: outer.bottom.b },
+  });
   const unclearEdges: Edge[] = [];
   for (const edge of EDGES) {
     const reading = readings[edge];
@@ -406,7 +413,8 @@ function analyzeCard(
       fits[edge] = found.stats;
       const wandered = Math.abs(reading.line.b - slope) > FRAME_ANGLE_TOLERANCE;
       const unclear = found.stats.inlierRatio < 0.55 || found.stats.rms > Math.max(1.2, pxPerMm * 0.1);
-      const foil = reading.noise >= 12 || found.contrast < 1.5 * reading.noise;
+      // Backs aren't foil. Their frame is just a soft blue-on-blue edge, which reads fine.
+      const foil = side !== "back" && (reading.noise >= 12 || found.contrast < 1.5 * reading.noise);
       if (wandered || unclear || foil) {
         unclearEdges.push(edge);
       }
@@ -445,7 +453,6 @@ function analyzeCard(
   }
 
   const measurement = { outer, inner, fits };
-  const side = guessSide(crop, outer, inner);
 
   const widthAt = (edge: Edge) => {
     const sign = edge === "left" || edge === "top" ? 1 : -1;
