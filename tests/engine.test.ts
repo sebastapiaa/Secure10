@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { analyzeScan } from "../src/engine/pipeline";
+import { readingOrder, type Frame } from "../src/engine/locate";
 import { combineScores, computeCentering, scoreForShare } from "../src/engine/score";
 import type { Raster } from "../src/engine/types";
 import { share, synthScan, type SynthOptions } from "./synth";
@@ -136,6 +137,27 @@ describe("card location and measurement at 300 DPI", () => {
   it("gives up cleanly on an image with no card", () => {
     const blank: Raster = { width: 800, height: 600, data: new Uint8ClampedArray(800 * 600 * 4).fill(240) };
     expect(() => analyzeScan(blank, { metadataDpi: null })).toThrow();
+  });
+});
+
+describe("frame fitting", () => {
+  it("keeps all four frame lines square to each other", () => {
+    const { card } = run({ ...base, frameTilt: 0.3, rotation: 1 });
+    const { left, right, top, bottom } = card.measurement.inner;
+    expect(left.b).toBeCloseTo(right.b, 6);
+    expect(top.b).toBeCloseTo(bottom.b, 6);
+    expect(top.b).toBeCloseTo(-left.b, 6);
+  });
+});
+
+describe("card order on a scan", () => {
+  const at = (cx: number, cy: number): Frame => ({ cx, cy, ex: [1, 0], ey: [0, 1], w: 744, h: 1039 });
+  const order = (frames: Frame[]) => readingOrder(frames).map((f) => f.cx);
+
+  it("numbers hand-placed cards the same on the front and back scans", () => {
+    // Positions measured from a real pair of scans: two cards up top, not level, and one below.
+    expect(order([at(530, 660), at(1470, 680), at(1100, 1920)])).toEqual([530, 1470, 1100]);
+    expect(order([at(1660, 945), at(745, 810), at(1060, 2000)])).toEqual([745, 1660, 1060]);
   });
 });
 

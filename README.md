@@ -22,6 +22,7 @@ Push to GitHub and import the repository in Vercel. It's a static Vite site, and
 - 300 DPI or higher. 600 DPI halves the error from each pixel.
 - JPG, PNG, WEBP or TIFF. PDF isn't supported.
 - Lid closed and some background visible around the whole card. Several cards on one scan is fine, and each becomes its own entry. A front and a back on the same scan are paired.
+- To pair several cards, make one scan of the fronts and one of the backs with the cards in the same layout, then upload both. Cards are numbered top to bottom, left to right, and matched by that number. If you flip cards over in place, left and right swap, so put them back in the original layout before scanning the other side.
 - Take the card out of its sleeve or toploader, since their edges read as the card's edge.
 
 ## How the score works
@@ -45,7 +46,7 @@ The score is the highest PSA grade whose limit the card meets, on its worse axis
 1. Finds the card by flood-filling the background in from the edges of the scan, then fits a rectangle to whatever is left.
 2. Walks in from the background at 44 points per side and fits a line through the card edge, ignoring dust and chips.
 3. Straightens the card at its original resolution.
-4. Finds the printed frame at 56 points per side. A line must span most of the side to count, so copyright text in the bottom border doesn't.
+4. Finds the printed frame at 56 points per side. A line must span most of the side to count, so copyright text in the bottom border doesn't. The frame is one printed rectangle, so all four lines share one angle, taken from the sides that read cleanly.
 5. Reads both axes from the fitted lines and reports the error from the fit.
 6. Cross-checks the result. A miscut can't change the total border, so if the total across and the total down disagree, a line is probably wrong and the score is marked provisional.
 

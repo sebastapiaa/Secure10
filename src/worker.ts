@@ -104,9 +104,6 @@ self.onmessage = async (event: MessageEvent<{ id: number; file: File }>) => {
     const cards: WorkerCard[] = [];
     for (const a of analyses) {
       const encoded = await encode(a.crop);
-      if (analyses.length > 1) {
-        a.warnings.push(`This scan held ${analyses.length} cards. Each one was saved as its own entry.`);
-      }
       cards.push({
         crop: encoded.crop,
         thumb: encoded.thumb,

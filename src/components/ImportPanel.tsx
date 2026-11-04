@@ -5,10 +5,11 @@ const ACCEPT = "image/jpeg,image/png,image/webp,image/tiff,image/bmp,.tif,.tiff"
 interface Props {
   busy: string | null;
   errors: string[];
+  notice: string | null;
   onFiles: (files: File[]) => void;
 }
 
-export function ImportPanel({ busy, errors, onFiles }: Props) {
+export function ImportPanel({ busy, errors, notice, onFiles }: Props) {
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
 
@@ -55,7 +56,12 @@ export function ImportPanel({ busy, errors, onFiles }: Props) {
           e.target.value = "";
         }}
       />
-      <p className="hint">300 DPI or higher, JPG, PNG or TIFF. Leave background around the card, lid closed. The card is found, straightened and measured for you.</p>
+      <p className="hint">300 DPI or higher, JPG, PNG or TIFF. Leave background around each card, lid closed. For several cards, keep them in the same layout on the front and back scans and they'll be matched by position.</p>
+      {notice && (
+        <p className="notice" role="status">
+          {notice}
+        </p>
+      )}
       {errors.map((message) => (
         <p className="error" role="alert" key={message}>
           {message}

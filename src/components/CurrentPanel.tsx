@@ -103,12 +103,13 @@ interface Props {
   onActiveSide: (side: CardSide) => void;
   onMeasurement: (side: CardSide, m: Measurement, adjusted: boolean) => void;
   onSwapSide: (from: CardSide) => void;
+  onSeparate: () => void;
   onAddSide: (file: File, side: CardSide) => void;
   onRename: (name: string) => void;
   busy: string | null;
 }
 
-export function CurrentPanel({ record, activeSide, onActiveSide, onMeasurement, onSwapSide, onAddSide, onRename, busy }: Props) {
+export function CurrentPanel({ record, activeSide, onActiveSide, onMeasurement, onSwapSide, onSeparate, onAddSide, onRename, busy }: Props) {
   const scan = record?.sides[activeSide];
   const url = useObjectUrl(scan?.crop);
   const [live, setLive] = useState<Measurement | null>(null);
@@ -190,7 +191,7 @@ export function CurrentPanel({ record, activeSide, onActiveSide, onMeasurement, 
               <span>
                 <i className="swatch inner" /> Printed frame
               </span>
-              <span className="legend-hint">Drag a line to correct it, or focus it and use the arrow keys</span>
+              <span className="legend-hint">Drag a line to move it, or a dot at its end to change its angle</span>
             </div>
           </div>
           <div className="readout">
@@ -244,6 +245,11 @@ export function CurrentPanel({ record, activeSide, onActiveSide, onMeasurement, 
               <button type="button" onClick={() => onSwapSide(activeSide)}>
                 This is the {otherSide}
               </button>
+              {record.sides.front && record.sides.back && (
+                <button type="button" onClick={onSeparate}>
+                  Not the same card? Separate
+                </button>
+              )}
               {scan.adjusted && (
                 <button type="button" onClick={() => onMeasurement(activeSide, scan.autoMeasurement, false)}>
                   Reset lines

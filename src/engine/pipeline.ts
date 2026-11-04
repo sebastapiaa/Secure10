@@ -104,6 +104,27 @@ interface InnerResult {
   line: Line;
   stats: FitStats;
   contrast: number;
+  /** Typical colour noise inside the border. Foil reads high, plain print low. */
+  noise: number;
+  /** Re-reads this side with the line's angle fixed, keeping only the position free. */
+  refit: (slope: number, slopeError: number) => { line: Line; stats: FitStats; contrast: number };
+}
+
+/** The position of a line of known slope that the most readings agree on. */
+function bestOffset(xs: number[], ys: number[], slope: number, threshold: number) {
+  const residuals = xs.map((x, i) => ys[i] - slope * x);
+  let bestCount = 0;
+  let offset = median(residuals);
+  for (const candidate of residuals) {
+    const agreeing = residuals.filter((r) => Math.abs(r - candidate) <= threshold);
+    if (agreeing.length > bestCount) {
+      bestCount = agreeing.length;
+      offset = agreeing.reduce((sum, r) => sum + r, 0) / agreeing.length;
+    }
+  }
+  const inliers = residuals.filter((r) => Math.abs(r - offset) <= threshold);
+  const rms = inliers.length ? Math.sqrt(inliers.reduce((sum, r) => sum + (r - offset) ** 2, 0) / inliers.length) : 0;
+  return { offset, count: inliers.length, rms };
 }
 
 /**
@@ -218,11 +239,63 @@ function findInnerEdge(crop: Raster, outer: EdgeLines, edge: Edge, pxPerMm: numb
     a: outerLine.a + inwardSign * fit.line.a,
     b: outerLine.b + inwardSign * fit.line.b,
   };
+  const span = Math.abs(to - from);
+  const refit: InnerResult["refit"] = (slope, slopeError) => {
+    const depthSlope = inwardSign * (slope - outerLine.b);
+    const rough = bestOffset(first.xs, first.ys, depthSlope, threshold * 1.5);
+    const near = locate((u) => rough.offset + depthSlope * u, Math.max(3, pxPerMm * 0.35));
+    const best = near.xs.length >= 4 ? bestOffset(near.xs, near.ys, depthSlope, threshold) : { ...rough, count: 0 };
+    return {
+      line: { a: outerLine.a + inwardSign * best.offset, b: slope },
+      stats: {
+        samples: stations,
+        inlierRatio: best.count / stations,
+        rms: best.rms,
+        // The score reads this line near the ends of the span, so the shared angle's error counts too.
+        se: Math.hypot(best.rms / Math.sqrt(Math.max(1, best.count)), slopeError * 0.36 * span),
+      },
+      contrast: near.plateaus.length ? median(near.plateaus) : 0,
+    };
+  };
+
   return {
     line,
     stats: { ...fit.stats, samples: stations, inlierRatio: fit.stats.inlierRatio * (second.xs.length / stations) },
     contrast: median(second.plateaus),
+    noise: median(thresholds),
+    refit,
   };
+}
+
+/** Slope that a tilt of phi gives a line on this edge. Top and bottom tilt opposite to left and right. */
+function slopeFor(edge: Edge, phi: number): number {
+  return edge === "top" || edge === "bottom" ? phi : -phi;
+}
+
+const FRAME_ANGLE_TOLERANCE = 0.0052; // 0.3 degrees
+
+/**
+ * The printed frame is one rectangle, so all four sides share one tilt. Takes it from the sides that read
+ * cleanly and agree with each other. With no such agreement, foil or art has fooled the fit, so it falls
+ * back on the angle of the cut, which real frames stay very close to.
+ */
+function frameTilt(found: Partial<Record<Edge, InnerResult>>, outer: EdgeLines, pxPerMm: number) {
+  const mean = (values: number[]) => values.reduce((a, b) => a + b, 0) / values.length;
+  const outerPhi = mean(EDGES.map((e) => (e === "top" || e === "bottom" ? outer[e].b : -outer[e].b)));
+  const clean = EDGES.flatMap((edge) => {
+    const r = found[edge];
+    if (!r || r.stats.inlierRatio < 0.7 || r.stats.rms > Math.max(1, pxPerMm * 0.085)) return [];
+    return [edge === "top" || edge === "bottom" ? r.line.b : -r.line.b];
+  });
+  let best: number[] = [];
+  for (const candidate of clean) {
+    const group = clean.filter((phi) => Math.abs(phi - candidate) <= FRAME_ANGLE_TOLERANCE);
+    if (group.length > best.length || (group.length === best.length && Math.abs(mean(group) - outerPhi) < Math.abs(mean(best) - outerPhi))) {
+      best = group;
+    }
+  }
+  if (best.length < 2) return { phi: outerPhi, error: FRAME_ANGLE_TOLERANCE / 2 };
+  return { phi: mean(best), error: Math.max(0.0005, (Math.max(...best) - Math.min(...best)) / 2) };
 }
 
 function guessSide(crop: Raster, outer: EdgeLines, inner: EdgeLines): CardSide {
@@ -317,14 +390,25 @@ function analyzeCard(
 
   const inner = {} as EdgeLines;
   const fits: Partial<Record<Edge, FitStats>> = {};
+  const readings: Partial<Record<Edge, InnerResult>> = {};
   for (const edge of EDGES) {
-    const found = findInnerEdge(crop, outer, edge, pxPerMm);
-    if (found) {
+    const reading = findInnerEdge(crop, outer, edge, pxPerMm);
+    if (reading) readings[edge] = reading;
+  }
+  const tilt = frameTilt(readings, outer, pxPerMm);
+  const unclearEdges: Edge[] = [];
+  for (const edge of EDGES) {
+    const reading = readings[edge];
+    if (reading) {
+      const slope = slopeFor(edge, tilt.phi);
+      const found = reading.refit(slope, tilt.error);
       inner[edge] = found.line;
       fits[edge] = found.stats;
-      if (found.stats.inlierRatio < 0.55 || found.stats.rms > Math.max(1.2, pxPerMm * 0.1)) {
-        warnings.push(`The ${edge} frame line is uneven or low contrast. Check it by eye.`);
-        needsReview = true;
+      const wandered = Math.abs(reading.line.b - slope) > FRAME_ANGLE_TOLERANCE;
+      const unclear = found.stats.inlierRatio < 0.55 || found.stats.rms > Math.max(1.2, pxPerMm * 0.1);
+      const foil = reading.noise >= 12 || found.contrast < 1.5 * reading.noise;
+      if (wandered || unclear || foil) {
+        unclearEdges.push(edge);
       }
     } else {
       const sign = edge === "left" || edge === "top" ? 1 : -1;
@@ -332,6 +416,12 @@ function analyzeCard(
       warnings.push(`No printed frame found on the ${edge}, as on a borderless card. Place that line by hand.`);
       needsReview = true;
     }
+  }
+
+  if (unclearEdges.length > 0) {
+    const list = new Intl.ListFormat("en").format(unclearEdges);
+    warnings.push(`No clear frame on the ${list}, which is common on foil and full-art cards. Check ${unclearEdges.length > 1 ? "those lines" : "that line"} by eye.`);
+    needsReview = true;
   }
 
   // A cropped-looking file with no printed frame on most sides is not a scan of a card at all.
@@ -355,6 +445,7 @@ function analyzeCard(
   }
 
   const measurement = { outer, inner, fits };
+  const side = guessSide(crop, outer, inner);
 
   const widthAt = (edge: Edge) => {
     const sign = edge === "left" || edge === "top" ? 1 : -1;
@@ -362,13 +453,14 @@ function analyzeCard(
     return (sign * (lineAt(inner[edge], across) - lineAt(outer[edge], across))) / pxPerMm;
   };
 
-  // A miscut moves the print inside the cut but can't change how much border there is in total, and cards
-  // print about the same total both ways. A mismatch means a line landed on something other than the frame,
+  // A miscut moves the print inside the cut but can't change how much border there is in total. Fronts
+  // print about the same total both ways, and backs about 0.8 mm more down than across. A mismatch means a line landed on something other than the frame,
   // as on a silver Trainer card whose frame fades into its top panel.
   const totalAcross = widthAt("left") + widthAt("right");
   const totalDown = widthAt("top") + widthAt("bottom");
-  if (Math.abs(totalAcross - totalDown) > 0.45) {
-    warnings.push(`The borders don't add up: ${totalAcross.toFixed(2)} mm across against ${totalDown.toFixed(2)} mm down, where they'd normally nearly match. A line is probably on the wrong feature, so check them all.`);
+  const expectedExtraDown = side === "back" ? 0.8 : 0;
+  if (Math.abs(totalDown - totalAcross - expectedExtraDown) > 0.45) {
+    warnings.push(`The borders don't add up: ${totalAcross.toFixed(2)} mm across against ${totalDown.toFixed(2)} mm down, which doesn't match how this side is printed. A line is probably on the wrong feature, so check them all.`);
     needsReview = true;
   }
 
@@ -380,7 +472,6 @@ function analyzeCard(
       needsReview = true;
     }
   }
-  const side = guessSide(crop, outer, inner);
   const angle = (Math.atan2(frame.ex[1], frame.ex[0]) * 180) / Math.PI;
 
   return {

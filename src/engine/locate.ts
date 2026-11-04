@@ -224,6 +224,21 @@ function wholeImageFrame(src: Raster): Frame {
   return { cx: src.width / 2, cy: src.height / 2, ex: [1, 0], ey: [0, 1], w: src.width, h: src.height };
 }
 
+/**
+ * Top to bottom, then left to right within a row. Cards count as one row if they overlap by at least half
+ * a card's height, so hand-placed cards that aren't level still number the same way on both scans.
+ */
+export function readingOrder(frames: Frame[]): Frame[] {
+  const byHeight = [...frames].sort((a, b) => a.cy - b.cy);
+  const rows: Frame[][] = [];
+  for (const frame of byHeight) {
+    const row = rows[rows.length - 1];
+    if (row && frame.cy - row[0].cy < frame.h / 2) row.push(frame);
+    else rows.push([frame]);
+  }
+  return rows.flatMap((row) => row.sort((a, b) => a.cx - b.cx));
+}
+
 export function locateCards(src: Raster): Located {
   const small = shrink(src, 1000);
   const background = estimateBackground(small);
@@ -280,10 +295,7 @@ export function locateCards(src: Raster): Located {
   }
 
   const largest = Math.max(...candidates.map((c) => c.area));
-  const frames = candidates
-    .filter((c) => c.area >= largest * 0.55)
-    .map((c) => c.frame)
-    .sort((a, b) => a.cy - b.cy || a.cx - b.cx);
+  const frames = readingOrder(candidates.filter((c) => c.area >= largest * 0.55).map((c) => c.frame));
   return { frames, tight: false, background };
 }
 

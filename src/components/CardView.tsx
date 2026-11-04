@@ -8,6 +8,10 @@ interface Handle {
   which: Which;
   edge: Edge;
 }
+type DotEnd = "start" | "end";
+
+/** Dots sit just inside the crop so they stay on screen. */
+const DOT_INSET = 0.035;
 
 function endpoints(line: Line, edge: Edge, w: number, h: number) {
   return edge === "left" || edge === "right"
@@ -36,7 +40,7 @@ export function CardView({ url, width, height, measurement, onChange }: Props) {
   const svg = useRef<SVGSVGElement>(null);
   const loupe = useRef<HTMLCanvasElement>(null);
   const image = useRef<HTMLImageElement>(null);
-  const dragging = useRef<{ handle: Handle; startValue: number; startA: number; moved: boolean } | null>(null);
+  const dragging = useRef<{ handle: Handle; dot?: DotEnd; startValue: number; startA: number; moved: boolean } | null>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number; px: number; py: number } | null>(null);
 
   const toImage = (e: PointerEvent) => {
@@ -49,24 +53,35 @@ export function CardView({ url, width, height, measurement, onChange }: Props) {
     };
   };
 
-  const moved = (handle: Handle, a: number): Measurement => {
+  const replaced = (handle: Handle, line: Line): Measurement => {
     const lines = measurement[handle.which];
     const fits = { ...measurement.fits };
     if (handle.which === "inner") delete fits[handle.edge];
-    return {
-      ...measurement,
-      fits,
-      [handle.which]: { ...lines, [handle.edge]: { ...lines[handle.edge], a } },
-    };
+    return { ...measurement, fits, [handle.which]: { ...lines, [handle.edge]: line } };
   };
 
-  const beginDrag = (e: PointerEvent, handle: Handle) => {
+  const moved = (handle: Handle, a: number): Measurement =>
+    replaced(handle, { ...measurement[handle.which][handle.edge], a });
+
+  const lengthOf = (edge: Edge) => (edge === "left" || edge === "right" ? height : width);
+
+  /** Swings the line about its other dot, so the far end stays where it was placed. */
+  const pivoted = (handle: Handle, dot: DotEnd, value: number): Measurement => {
+    const line = measurement[handle.which][handle.edge];
+    const length = lengthOf(handle.edge);
+    const near = dot === "start" ? length * DOT_INSET : length * (1 - DOT_INSET);
+    const far = dot === "start" ? length * (1 - DOT_INSET) : length * DOT_INSET;
+    const b = (lineAt(line, far) - value) / (far - near);
+    return replaced(handle, { a: value - b * near, b });
+  };
+
+  const beginDrag = (e: PointerEvent, handle: Handle, dot?: DotEnd) => {
     e.preventDefault();
     e.stopPropagation();
     (e.target as Element).setPointerCapture(e.pointerId);
     const p = toImage(e);
     const value = handle.edge === "left" || handle.edge === "right" ? p.x : p.y;
-    dragging.current = { handle, startValue: value, startA: measurement[handle.which][handle.edge].a, moved: false };
+    dragging.current = { handle, dot, startValue: value, startA: measurement[handle.which][handle.edge].a, moved: false };
   };
 
   const onPointerMove = (e: PointerEvent) => {
@@ -76,7 +91,7 @@ export function CardView({ url, width, height, measurement, onChange }: Props) {
     if (!d) return;
     const value = d.handle.edge === "left" || d.handle.edge === "right" ? p.x : p.y;
     d.moved = true;
-    onChange(moved(d.handle, d.startA + value - d.startValue), false);
+    onChange(d.dot ? pivoted(d.handle, d.dot, value) : moved(d.handle, d.startA + value - d.startValue), false);
   };
 
   const onPointerUp = (e: PointerEvent) => {
@@ -86,7 +101,7 @@ export function CardView({ url, width, height, measurement, onChange }: Props) {
     if (d.moved) {
       const p = toImage(e);
       const value = d.handle.edge === "left" || d.handle.edge === "right" ? p.x : p.y;
-      onChange(moved(d.handle, d.startA + value - d.startValue), true);
+      onChange(d.dot ? pivoted(d.handle, d.dot, value) : moved(d.handle, d.startA + value - d.startValue), true);
     }
   };
 
@@ -98,6 +113,18 @@ export function CardView({ url, width, height, measurement, onChange }: Props) {
     e.preventDefault();
     const step = (e.shiftKey ? 2 : 0.25) * (e.key === back ? -1 : 1);
     onChange(moved(handle, measurement[handle.which][handle.edge].a + step), true);
+  };
+
+  const onDotKey = (e: KeyboardEvent, handle: Handle, dot: DotEnd) => {
+    const vertical = handle.edge === "left" || handle.edge === "right";
+    const back = vertical ? "ArrowLeft" : "ArrowUp";
+    const forward = vertical ? "ArrowRight" : "ArrowDown";
+    if (e.key !== back && e.key !== forward) return;
+    e.preventDefault();
+    const length = lengthOf(handle.edge);
+    const near = dot === "start" ? length * DOT_INSET : length * (1 - DOT_INSET);
+    const step = (e.shiftKey ? 2 : 0.25) * (e.key === back ? -1 : 1);
+    onChange(pivoted(handle, dot, lineAt(measurement[handle.which][handle.edge], near) + step), true);
   };
 
   useEffect(() => {
@@ -169,6 +196,35 @@ export function CardView({ url, width, height, measurement, onChange }: Props) {
                 onPointerDown={(e) => beginDrag(e, handle)}
                 onKeyDown={(e) => onKey(e, handle)}
               />
+            </g>
+          );
+        })}
+        {/* Drawn after every line, so a neighbouring line's grab area can't cover a dot. */}
+        {handles.map((handle) => {
+          const vertical = handle.edge === "left" || handle.edge === "right";
+          return (
+            <g key={handle.which + handle.edge} className={`handle ${handle.which}`}>
+              {(["start", "end"] as const).map((dot) => {
+                const line = measurement[handle.which][handle.edge];
+                const u = lengthOf(handle.edge) * (dot === "start" ? DOT_INSET : 1 - DOT_INSET);
+                const v = lineAt(line, u);
+                return (
+                  <circle
+                    key={dot}
+                    className="handle-dot"
+                    cx={vertical ? v : u}
+                    cy={vertical ? u : v}
+                    r={width * 0.014}
+                    style={{ cursor: vertical ? "ew-resize" : "ns-resize" }}
+                    tabIndex={0}
+                    role="slider"
+                    aria-label={`Change angle of ${handle.which === "outer" ? "card edge" : "frame line"}, ${handle.edge}, ${dot === "start" ? (vertical ? "top" : "left") : vertical ? "bottom" : "right"} end`}
+                    aria-valuenow={Math.round(v)}
+                    onPointerDown={(e) => beginDrag(e, handle, dot)}
+                    onKeyDown={(e) => onDotKey(e, handle, dot)}
+                  />
+                );
+              })}
             </g>
           );
         })}

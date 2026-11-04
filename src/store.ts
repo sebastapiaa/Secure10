@@ -23,6 +23,8 @@ export interface ScanRecord {
   name: string;
   createdAt: number;
   sides: Partial<Record<CardSide, SideScan>>;
+  /** Where this card sat on a multi-card scan, used to match it with the scan of the other side. */
+  layout?: { fileName: string; slot: number; total: number };
 }
 
 const DB_NAME = "secure10";

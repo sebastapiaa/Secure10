@@ -33,6 +33,34 @@ function toSide(card: WorkerCard, fileName: string): SideScan {
   };
 }
 
+function majoritySide(cards: { side: CardSide }[]): CardSide {
+  const fronts = cards.filter((c) => c.side === "front").length;
+  return fronts * 2 >= cards.length ? "front" : "back";
+}
+
+/**
+ * Finds an earlier multi-card scan that this one is the other side of: same number of cards, the opposite
+ * side, and none of them matched yet. Returns its records in slot order, which lines up with `cards`
+ * because both scans number their cards top to bottom, left to right.
+ */
+function findOtherSideScan(records: ScanRecord[], cards: WorkerCard[], fileName: string): ScanRecord[] | null {
+  if (cards.length < 2) return null;
+  const side = majoritySide(cards);
+  const seen = new Set<string>();
+  for (const record of records) {
+    const source = record.layout?.fileName;
+    if (!source || source === fileName || seen.has(source)) continue;
+    seen.add(source);
+    const group = records.filter((r) => r.layout?.fileName === source);
+    if (group.length !== cards.length || group[0].layout!.total !== cards.length) continue;
+    if (group.some((r) => r.sides.front && r.sides.back)) continue;
+    const groupSide = majoritySide(group.map((r) => ({ side: r.sides.front ? ("front" as const) : ("back" as const) })));
+    if (groupSide === side) continue;
+    return group.sort((a, b) => a.layout!.slot - b.layout!.slot);
+  }
+  return null;
+}
+
 function useMeasureWorker() {
   const workerRef = useRef<Worker | null>(null);
   const pending = useRef(new Map<number, (reply: WorkerReply) => void>());
@@ -63,6 +91,7 @@ export default function App() {
   const [activeSide, setActiveSide] = useState<CardSide>("front");
   const [busy, setBusy] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
   const [storageFailed, setStorageFailed] = useState(false);
   const measure = useMeasureWorker();
 
@@ -80,7 +109,12 @@ export default function App() {
 
   const current = useMemo(() => records.find((r) => r.id === currentId) ?? null, [records, currentId]);
 
+  // Importing awaits between files, so matching has to see records saved earlier in the same loop.
+  const latest = useRef<ScanRecord[]>([]);
+  latest.current = records;
+
   const persist = useCallback((record: ScanRecord) => {
+    latest.current = [record, ...latest.current.filter((r) => r.id !== record.id)];
     setRecords((rows) => {
       const others = rows.filter((r) => r.id !== record.id);
       return [record, ...others].sort((a, b) => b.createdAt - a.createdAt);
@@ -91,6 +125,7 @@ export default function App() {
   const importFiles = useCallback(
     async (files: File[]) => {
       setErrors([]);
+      setNotice(null);
       let last: ScanRecord | null = null;
       let lastSide: CardSide = "front";
       for (let i = 0; i < files.length; i++) {
@@ -102,6 +137,19 @@ export default function App() {
           continue;
         }
         const cards = reply.cards;
+        const matches = findOtherSideScan(latest.current, cards, file.name);
+        if (matches) {
+          matches.forEach((record, slot) => {
+            const existing: CardSide = record.sides.front ? "front" : "back";
+            const side: CardSide = existing === "front" ? "back" : "front";
+            const merged: ScanRecord = { ...record, layout: undefined, sides: { ...record.sides, [side]: toSide(cards[slot], file.name) } };
+            persist(merged);
+            last = merged;
+            lastSide = "front";
+          });
+          setNotice(`Matched ${cards.length} cards with ${matches[0].layout!.fileName} by their position on the scan. Check each pair looks right.`);
+          continue;
+        }
         // A front and a back on one bed are almost certainly the same card.
         const isPair = cards.length === 2 && cards[0].side !== cards[1].side;
         const groups = isPair ? [cards] : cards.map((c) => [c]);
@@ -114,6 +162,7 @@ export default function App() {
             name: cleanName(file.name) + suffix,
             createdAt: Date.now() + g,
             sides,
+            layout: groups.length > 1 ? { fileName: file.name, slot: g, total: groups.length } : undefined,
           };
           persist(record);
           last = record;
@@ -170,6 +219,14 @@ export default function App() {
     [current, persist],
   );
 
+  const separate = useCallback(() => {
+    if (!current?.sides.front || !current.sides.back) return;
+    const back: ScanRecord = { id: newId(), name: `${current.name} back`, createdAt: current.createdAt - 1, sides: { back: current.sides.back } };
+    persist({ ...current, sides: { front: current.sides.front } });
+    persist(back);
+    setActiveSide("front");
+  }, [current, persist]);
+
   const rename = useCallback(
     (name: string) => {
       if (current) persist({ ...current, name });
@@ -206,7 +263,7 @@ export default function App() {
         <p className="masthead-note">Centering only, measured against PSA's published tolerances</p>
       </header>
       <aside className="rail">
-        <ImportPanel busy={busy} errors={errors} onFiles={importFiles} />
+        <ImportPanel busy={busy} errors={errors} notice={notice} onFiles={importFiles} />
         <HistoryPanel records={records} currentId={currentId} onSelect={select} onDelete={remove} />
       </aside>
       <main className="stage">
@@ -216,6 +273,7 @@ export default function App() {
           onActiveSide={setActiveSide}
           onMeasurement={updateMeasurement}
           onSwapSide={swapSide}
+          onSeparate={separate}
           onAddSide={addOtherSide}
           onRename={rename}
           busy={busy}

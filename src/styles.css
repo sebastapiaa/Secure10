@@ -188,6 +188,14 @@ h2 {
   font-size: 13px;
 }
 
+.notice {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent);
+  background: rgba(232, 197, 71, 0.1);
+  font-size: 13px;
+}
+
 /* History */
 
 .history {
@@ -467,6 +475,27 @@ h2 {
   stroke-width: 11;
   outline: none;
   touch-action: none;
+}
+
+.handle-dot {
+  fill: var(--bg);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  outline: none;
+  touch-action: none;
+}
+
+.handle.outer .handle-dot {
+  stroke: var(--outer);
+}
+
+.handle.inner .handle-dot {
+  stroke: var(--inner);
+}
+
+.handle-dot:hover,
+.handle-dot:focus-visible {
+  fill: var(--text);
 }
 
 .handle:hover .handle-line,
